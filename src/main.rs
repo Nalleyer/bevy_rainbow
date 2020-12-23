@@ -41,6 +41,7 @@ const FRAGMENT_SHADER: &str = r#"
 layout(location = 0) out vec4 o_Target;
 layout(location = 0) in float v_x;
 
+// rainbow from: https://github.com/wsmind/js-pride
 vec3 rainbow(float x)
 {
     /*
