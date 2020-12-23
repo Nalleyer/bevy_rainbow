@@ -1,9 +1,72 @@
 use std::time::Duration;
 
-use bevy::{prelude::*, render::mesh::Indices, render::pipeline::PrimitiveTopology};
-use rand::prelude::random;
+use bevy::{
+    prelude::*,
+    reflect::TypeUuid,
+    render::{
+        mesh::{Indices, VertexAttributeValues},
+        pipeline::PrimitiveTopology,
+        pipeline::{CullMode, PipelineDescriptor, RasterizationStateDescriptor, RenderPipeline},
+        render_graph::{base, AssetRenderResourcesNode, RenderGraph},
+        renderer::RenderResources,
+        shader::{ShaderStage, ShaderStages},
+    },
+};
 
 const SIZE: f32 = 100.;
+
+#[derive(RenderResources, Default, TypeUuid)]
+#[uuid = "0320b9b8-b3a3-4baa-8bfa-c94008177b17"]
+struct MyMaterialWithVertexColorSupport {}
+
+const VERTEX_SHADER: &str = r#"
+#version 450
+layout(location = 0) in vec3 Vertex_Position;
+layout(location = 1) in float Vertex_X;
+layout(location = 0) out float v_x;
+layout(set = 0, binding = 0) uniform Camera {
+    mat4 ViewProj;
+};
+layout(set = 1, binding = 0) uniform Transform {
+    mat4 Model;
+};
+void main() {
+    gl_Position = ViewProj * Model * vec4(Vertex_Position, 1.0);
+    v_x = Vertex_X;
+}
+"#;
+
+const FRAGMENT_SHADER: &str = r#"
+#version 450
+layout(location = 0) out vec4 o_Target;
+layout(location = 0) in float v_x;
+
+vec3 rainbow(float x)
+{
+    /*
+        Target colors
+        =============
+
+        L  x   color
+        0  0.0 vec4(1.0, 0.0, 0.0, 1.0);
+        1  0.2 vec4(1.0, 0.5, 0.0, 1.0);
+        2  0.4 vec4(1.0, 1.0, 0.0, 1.0);
+        3  0.6 vec4(0.0, 0.5, 0.0, 1.0);
+        4  0.8 vec4(0.0, 0.0, 1.0, 1.0);
+        5  1.0 vec4(0.5, 0.0, 0.5, 1.0);
+    */
+
+    float level = floor(x * 6.0);
+    float r = float(level <= 2.0) + float(level > 4.0) * 0.5;
+    float g = max(1.0 - abs(level - 2.0) * 0.5, 0.0);
+    float b = (1.0 - (level - 4.0) * 0.5) * float(level >= 4.0);
+    return vec3(r, g, b);
+}
+
+void main() {
+    o_Target = vec4(rainbow(v_x), 1.0);
+}
+"#;
 
 type Vertice = ([f32; 3], [f32; 3], [f32; 2]);
 
@@ -33,7 +96,7 @@ fn make_mesh(vertices: &[Vertice], indices: Vec<u16>) -> Mesh {
 }
 
 fn make_player_mesh(size: f32) -> Mesh {
-    let indices = vec![0, 1, 2, 2, 0, 3];
+    let indices = vec![0, 2, 1, 2, 0, 3];
     let vertices = &[
         ([-size / 2., -size / 2., 0.], [0., 0., 1.], [0., 0.]),
         ([-size / 2., size / 2., 0.0], [0., 0., 1.], [0., 0.]),
@@ -49,7 +112,6 @@ struct TailTimer(Timer);
 
 #[derive(Default)]
 struct State {
-    // Set up from example
     cursor_moved_event_reader: EventReader<CursorMoved>,
 }
 
@@ -96,6 +158,7 @@ impl Player {
         self.tail[0] = new_node;
     }
 
+    #[allow(dead_code)]
     pub fn make_debug_tail(&mut self, pos: Vec2) {
         let scale = 200.;
         self.tail[0] = TailNode {
@@ -119,16 +182,34 @@ impl Player {
 
 fn setup(
     commands: &mut Commands,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut pipelines: ResMut<Assets<PipelineDescriptor>>,
+    mut shaders: ResMut<Assets<Shader>>,
+    mut materials: ResMut<Assets<MyMaterialWithVertexColorSupport>>,
+    mut render_graph: ResMut<RenderGraph>,
 ) {
-    let white = materials.add(Color::rgb(1.0, 1.0, 1.0).into());
-    let green = materials.add(Color::rgb(0.0, 1.0, 1.0).into());
+    let white = color_materials.add(Color::rgb(1.0, 1.0, 1.0).into());
     commands.spawn(Camera2dBundle::default());
     let player = Player {
         size: SIZE,
         tail: [TailNode::default(); TAIL_LEN],
     };
+
+    let mut pipeline_setting = PipelineDescriptor::default_config(ShaderStages {
+        vertex: shaders.add(Shader::from_glsl(ShaderStage::Vertex, VERTEX_SHADER)),
+        fragment: Some(shaders.add(Shader::from_glsl(ShaderStage::Fragment, FRAGMENT_SHADER))),
+    });
+
+    pipeline_setting
+        .rasterization_state
+        .replace(RasterizationStateDescriptor {
+            cull_mode: CullMode::None,
+            ..Default::default()
+        });
+
+    let pipeline_handle = pipelines.add(pipeline_setting);
+
     let player_entity = commands
         .spawn(SpriteBundle {
             mesh: meshes.add(make_player_mesh(SIZE)),
@@ -142,27 +223,39 @@ fn setup(
         .with(player)
         .current_entity();
 
+    render_graph.add_system_node(
+        "my_material_with_vertex_color_support",
+        AssetRenderResourcesNode::<MyMaterialWithVertexColorSupport>::new(true),
+    );
+
+    render_graph
+        .add_node_edge(
+            "my_material_with_vertex_color_support",
+            base::node::MAIN_PASS,
+        )
+        .unwrap();
+
+    let material = materials.add(MyMaterialWithVertexColorSupport {});
+
     commands
-        .spawn(SpriteBundle {
+        .spawn(MeshBundle {
             mesh: meshes.add(make_mesh(&[], vec![])),
-            material: green,
-            sprite: Sprite {
-                size: Vec2::new(1.0, 1.0),
-                ..Default::default()
-            },
+            render_pipelines: RenderPipelines::from_pipelines(vec![RenderPipeline::new(
+                pipeline_handle,
+            )]),
+            transform: Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
             ..Default::default()
         })
+        .with(material)
         .with(Tail {
             player: player_entity,
         });
 }
 
-fn move_system(mouse_pos: Res<MousePos>, mut query: Query<(&mut Transform, &Player)>) {
-    debug!("{:?}", query.iter_mut().count());
-    for (mut trans, player) in query.iter_mut() {
+fn move_system(mouse_pos: Res<MousePos>, mut query: Query<&mut Transform, With<Player>>) {
+    for mut trans in query.iter_mut() {
         trans.translation.x = mouse_pos.0.x;
         trans.translation.y = mouse_pos.0.y;
-        debug!("({},{})", trans.translation.x, trans.translation.y);
     }
 }
 
@@ -182,26 +275,14 @@ fn tail_gen_system(
     }
 }
 
-fn test_mesh_system(mut meshes: ResMut<Assets<Mesh>>, mut query: Query<(&Handle<Mesh>, &Player)>) {
-    for (mesh_handle, player) in query.iter() {
-        let mesh = meshes.get_mut(mesh_handle).unwrap();
-        make_tail_mesh(mesh, player);
-        // modify_mesh(mesh, vertices, indices);
-    }
-}
-
 fn tail_system(
     mut meshes: ResMut<Assets<Mesh>>,
-    mut query: Query<(&Handle<Mesh>, &mut Transform, &Tail)>,
+    mut query: Query<(&Handle<Mesh>, &Tail)>,
     query_a: Query<(&Player, &Transform)>,
 ) {
-    for (mesh_handle, mut trans, tail) in query.iter_mut() {
+    for (mesh_handle, tail) in query.iter_mut() {
         if let Some(player_entity) = tail.player {
             if let Ok(player) = query_a.get_component::<Player>(player_entity) {
-                // let player_trans = query_a.get_component::<Transform>(player_entity).unwrap();
-                // println!("{:?}", player.tail);
-                // let sprite = query.get_component_mut::<SpriteBundle>(entity).unwrap();
-                // trans.translation = player_trans.translation;
                 let mut mesh = meshes.get_mut(mesh_handle).unwrap();
                 make_tail_mesh(&mut mesh, player);
             } else {
@@ -239,7 +320,6 @@ fn get_normal(velocity: Vec2) -> Vec2 {
 }
 
 fn make_tail_mesh(mesh: &mut Mesh, player: &Player) {
-    let position_zero = player.tail[0].pos;
     let mut main_tail = [Vec2::zero(); TAIL_LEN];
     for (i, node) in player.tail.iter().enumerate() {
         main_tail[i] = node.pos;
@@ -260,21 +340,25 @@ fn make_tail_mesh(mesh: &mut Mesh, player: &Player) {
 
     let mut vertices = [([0.; 3], [0., 0., 1.], [0.; 2]); (TAIL_LEN - 1) * 4 - (TAIL_LEN - 2)];
     let indices = make_tail_indices();
+    let mut colors = vec![0.; vertices.len()];
     for i in 0..main_tail.len() {
         vertices[i].0 = vec2_to_array_3(main_tail[i]);
+        colors[i] = 1.0;
     }
     for i in 0..sub_tail.len() {
         vertices[i + TAIL_LEN].0 = vec2_to_array_3(sub_tail[i]);
+        colors[i + TAIL_LEN] = 0.0;
     }
-    // println!("{:?}", indices);
-    // println!("{:?}", vertices);
     modify_mesh(mesh, &vertices, indices);
+
+    mesh.set_attribute("Vertex_X", VertexAttributeValues::from(colors));
 }
 
 #[bevy_main]
 fn main() {
     App::build()
         .add_plugins(DefaultPlugins)
+        .add_asset::<MyMaterialWithVertexColorSupport>()
         .add_resource(MousePos(Vec2::new(0.0, 0.0)))
         .add_resource(TailTimer(Timer::new(Duration::from_millis(10u64), true)))
         .add_startup_system(setup.system())
@@ -282,6 +366,5 @@ fn main() {
         .add_system(move_system.system())
         .add_system(tail_gen_system.system())
         .add_system(tail_system.system())
-        // .add_system(test_mesh_system.system())
         .run();
 }
