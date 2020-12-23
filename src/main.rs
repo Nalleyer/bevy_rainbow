@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::{prelude::*, render::mesh::Indices, render::pipeline::PrimitiveTopology};
 use rand::prelude::random;
 
@@ -43,11 +45,12 @@ fn make_player_mesh(size: f32) -> Mesh {
 
 struct MousePos(Vec2);
 
+struct TailTimer(Timer);
+
 #[derive(Default)]
 struct State {
     // Set up from example
     cursor_moved_event_reader: EventReader<CursorMoved>,
-    gen_tail_counter: usize,
 }
 
 fn mouse_movement_updating_system(
@@ -69,7 +72,7 @@ struct TailNode {
     velocity: Vec2,
 }
 
-const TAIL_LEN: usize = 18;
+const TAIL_LEN: usize = 32;
 
 struct Player {
     size: f32,
@@ -82,7 +85,10 @@ struct Tail {
 
 impl Player {
     pub fn push_tail_node(&mut self, pos: Vec2) {
-        let velocity = pos - self.tail[0].pos;
+        let mut velocity = pos - self.tail[0].pos;
+        if pos.distance_squared(self.tail[0].pos) < 2. {
+            velocity = self.tail[0].velocity;
+        }
         let new_node = TailNode { pos, velocity };
         for i in (1..TAIL_LEN).rev() {
             self.tail[i] = self.tail[i - 1];
@@ -160,12 +166,15 @@ fn move_system(mouse_pos: Res<MousePos>, mut query: Query<(&mut Transform, &Play
     }
 }
 
-fn tail_gen_system(mut state: Local<State>, mut query: Query<(&Transform, &mut Player)>) {
-    state.gen_tail_counter += 1;
-    if state.gen_tail_counter < 3 {
+fn tail_gen_system(
+    time: Res<Time>,
+    mut tail_timer: ResMut<TailTimer>,
+    mut query: Query<(&Transform, &mut Player)>,
+) {
+    tail_timer.0.tick(time.delta_seconds());
+    if !tail_timer.0.finished() {
         return;
     }
-    state.gen_tail_counter = 0;
     for (trans, mut player) in query.iter_mut() {
         let pos = Vec2::new(trans.translation.x, trans.translation.y);
         player.push_tail_node(pos);
@@ -267,6 +276,7 @@ fn main() {
     App::build()
         .add_plugins(DefaultPlugins)
         .add_resource(MousePos(Vec2::new(0.0, 0.0)))
+        .add_resource(TailTimer(Timer::new(Duration::from_millis(10u64), true)))
         .add_startup_system(setup.system())
         .add_system(mouse_movement_updating_system.system())
         .add_system(move_system.system())
