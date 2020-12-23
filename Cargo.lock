@@ -512,6 +512,7 @@ name = "bevy_rainbow"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "rand",
 ]
 
 [[package]]
