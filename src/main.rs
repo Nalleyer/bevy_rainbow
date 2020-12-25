@@ -23,7 +23,9 @@ const VERTEX_SHADER: &str = r#"
 #version 450
 layout(location = 0) in vec3 Vertex_Position;
 layout(location = 1) in float Vertex_X;
+layout(location = 2) in float Vertex_A;
 layout(location = 0) out float v_x;
+layout(location = 1) out float v_a;
 layout(set = 0, binding = 0) uniform Camera {
     mat4 ViewProj;
 };
@@ -33,6 +35,7 @@ layout(set = 1, binding = 0) uniform Transform {
 void main() {
     gl_Position = ViewProj * Model * vec4(Vertex_Position, 1.0);
     v_x = Vertex_X;
+    v_a = Vertex_A;
 }
 "#;
 
@@ -40,6 +43,7 @@ const FRAGMENT_SHADER: &str = r#"
 #version 450
 layout(location = 0) out vec4 o_Target;
 layout(location = 0) in float v_x;
+layout(location = 1) in float v_a;
 
 // rainbow from: https://github.com/wsmind/js-pride
 vec3 rainbow(float x)
@@ -65,7 +69,7 @@ vec3 rainbow(float x)
 }
 
 void main() {
-    o_Target = vec4(rainbow(v_x), 1.0);
+    o_Target = vec4(rainbow(v_x), v_a);
 }
 "#;
 
@@ -342,17 +346,21 @@ fn make_tail_mesh(mesh: &mut Mesh, player: &Player) {
     let mut vertices = [([0.; 3], [0., 0., 1.], [0.; 2]); (TAIL_LEN - 1) * 4 - (TAIL_LEN - 2)];
     let indices = make_tail_indices();
     let mut colors = vec![0.; vertices.len()];
+    let mut alphas = vec![0.; vertices.len()];
     for i in 0..main_tail.len() {
         vertices[i].0 = vec2_to_array_3(main_tail[i]);
         colors[i] = 1.0;
+        alphas[i] = 1. - ((i as f32) / (main_tail.len() as f32));
     }
     for i in 0..sub_tail.len() {
         vertices[i + TAIL_LEN].0 = vec2_to_array_3(sub_tail[i]);
         colors[i + TAIL_LEN] = 0.0;
+        alphas[i + TAIL_LEN] = 1. - ((i as f32) / (sub_tail.len() as f32));
     }
     modify_mesh(mesh, &vertices, indices);
 
     mesh.set_attribute("Vertex_X", VertexAttributeValues::from(colors));
+    mesh.set_attribute("Vertex_A", VertexAttributeValues::from(alphas));
 }
 
 #[bevy_main]
